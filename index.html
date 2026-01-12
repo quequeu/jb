@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Controle de Jogos</title>
+    <title>Controle de Jogo do Bicho</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -34,6 +34,15 @@
         const { useState, useEffect, useRef } = React;
 
         function JogoBichoTracker() {
+            const [autenticado, setAutenticado] = useState(false);
+            const [senhaDefinida, setSenhaDefinida] = useState(null);
+            const [senha, setSenha] = useState('');
+            const [novaSenha, setNovaSenha] = useState('');
+            const [confirmaSenha, setConfirmaSenha] = useState('');
+            const [erro, setErro] = useState('');
+            const [carregandoAuth, setCarregandoAuth] = useState(true);
+            const senhaInputRef = useRef(null);
+
             const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
             const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
             const [investimentoTopo, setInvestimentoTopo] = useState('');
@@ -85,14 +94,65 @@
             const getMonthKey = (m, y) => `${y}-${String(m + 1).padStart(2, '0')}`;
 
             useEffect(() => {
-                const monthKey = getMonthKey(selectedMonth, selectedYear);
-                const dadosRef = window.firebaseDB.ref(window.firebaseDB.database, `jogos/${monthKey}`);
-                const unsubscribe = window.firebaseDB.onValue(dadosRef, (snapshot) => {
-                    setDados(snapshot.val() || {});
-                    setLoading(false);
-                });
-                return () => unsubscribe();
-            }, [selectedMonth, selectedYear]);
+                const verificarSenha = async () => {
+                    const senhaRef = window.firebaseDB.ref(window.firebaseDB.database, 'auth/senha');
+                    const snapshot = await window.firebaseDB.get(senhaRef);
+                    setSenhaDefinida(snapshot.val());
+                    setCarregandoAuth(false);
+                };
+                verificarSenha();
+            }, []);
+
+            useEffect(() => {
+                if (!carregandoAuth && senhaInputRef.current) {
+                    setTimeout(() => senhaInputRef.current?.focus(), 100);
+                }
+            }, [carregandoAuth, senhaDefinida]);
+
+            useEffect(() => {
+                if (autenticado) {
+                    setLoading(true);
+                    const monthKey = getMonthKey(selectedMonth, selectedYear);
+                    const dadosRef = window.firebaseDB.ref(window.firebaseDB.database, `jogos/${monthKey}`);
+                    const unsubscribe = window.firebaseDB.onValue(dadosRef, (snapshot) => {
+                        setDados(snapshot.val() || {});
+                        setLoading(false);
+                        setTimeout(() => inputInvestRef.current?.focus(), 100);
+                    });
+                    return () => unsubscribe();
+                }
+            }, [selectedMonth, selectedYear, autenticado]);
+
+            const handleDefinirSenha = async () => {
+                setErro('');
+                
+                if (novaSenha.length !== 4 || !/^\d{4}$/.test(novaSenha)) {
+                    setErro('A senha deve ter exatamente 4 números');
+                    return;
+                }
+
+                if (novaSenha !== confirmaSenha) {
+                    setErro('As senhas não coincidem');
+                    return;
+                }
+
+                const senhaRef = window.firebaseDB.ref(window.firebaseDB.database, 'auth/senha');
+                await window.firebaseDB.set(senhaRef, novaSenha);
+                setSenhaDefinida(novaSenha);
+                setAutenticado(true);
+            };
+
+            const handleLogin = () => {
+                setErro('');
+                
+                if (senha === senhaDefinida) {
+                    setAutenticado(true);
+                } else {
+                    setErro('Senha incorreta');
+                    setSenha('');
+                    senhaInputRef.current?.focus();
+                }
+            };
 
             const parseMoeda = (valor) => {
                 if (typeof valor === 'number') return valor;
@@ -113,7 +173,7 @@
                 await window.firebaseDB.set(window.firebaseDB.ref(window.firebaseDB.database, `jogos/${monthKey}`), novosDados);
             };
 
-            const handleUpdateTabela = async (dia, campo, valorDigitado) => {
+            const handleUpdateTabela = async (dia, hora, campo, valorDigitado) => {
                 const valorNum = parseMoeda(valorDigitado);
                 const novosDados = { ...dados };
                 if (!novosDados[dia]) novosDados[dia] = {};
@@ -121,16 +181,28 @@
                 listaHoras.forEach(h => {
                     if (horariosAtivos[h]) {
                         if (!novosDados[dia][h]) novosDados[dia][h] = { I: 0, G: 0, S: 0 };
-                        if (campo === 'I') novosDados[dia][h].I = valorNum;
-                        if (campo === 'G') novosDados[dia][h].G = valorNum;
+                        
+                        if (campo === 'I') {
+                            novosDados[dia][h].I = valorNum;
+                        } else if (campo === 'G') {
+                            novosDados[dia][h].G = valorNum;
+                        }
+                        
                         novosDados[dia][h].S = novosDados[dia][h].G - novosDados[dia][h].I;
                     }
                 });
+                
                 await salvarDados(novosDados);
             };
 
             const handleLancamentoTopo = async () => {
                 if (!investimentoTopo) return;
+                
+                if (selectedMonth !== mesAtualNum || selectedYear !== anoAtualNum) {
+                    alert('Você só pode lançar valores no mês atual!');
+                    return;
+                }
+                
                 const valorNum = parseMoeda(investimentoTopo);
                 const novosDados = { ...dados };
                 if (!novosDados[diaAtualNum]) novosDados[diaAtualNum] = {};
@@ -146,6 +218,7 @@
 
                 await salvarDados(novosDados);
                 setInvestimentoTopo('');
+                inputInvestRef.current?.focus();
             };
 
             const calcularTotais = () => {
@@ -229,6 +302,107 @@
                 });
             };
 
+            if (carregandoAuth) {
+                return <div className="h-screen flex items-center justify-center font-bold bg-slate-50">Carregando...</div>;
+            }
+
+            if (!autenticado) {
+                return (
+                    <div className="h-screen bg-gradient-to-br from-blue-600 via-blue-700 to-purple-700 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden">
+                            <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-8 text-white text-center">
+                                <div className="text-6xl mb-4">🎲</div>
+                                <h1 className="text-3xl font-black tracking-tight">JOGO DO BICHO</h1>
+                                <p className="text-blue-100 text-sm mt-2">Sistema de Controle</p>
+                            </div>
+
+                            <div className="p-8">
+                                {senhaDefinida === null ? (
+                                    <>
+                                        <h2 className="text-2xl font-black text-slate-800 mb-2 text-center">Primeiro Acesso</h2>
+                                        <p className="text-slate-600 text-center mb-6">Defina uma senha de 4 números</p>
+                                        
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Nova Senha</label>
+                                                <input 
+                                                    ref={senhaInputRef}
+                                                    type="password"
+                                                    maxLength="4"
+                                                    value={novaSenha}
+                                                    onChange={(e) => setNovaSenha(e.target.value.replace(/\D/g, ''))}
+                                                    onKeyDown={(e) => e.key === 'Enter' && handleDefinirSenha()}
+                                                    placeholder="••••"
+                                                    className="w-full text-center text-3xl font-black p-4 border-2 border-slate-300 rounded-xl focus:border-blue-500 outline-none tracking-widest"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Confirmar Senha</label>
+                                                <input 
+                                                    type="password"
+                                                    maxLength="4"
+                                                    value={confirmaSenha}
+                                                    onChange={(e) => setConfirmaSenha(e.target.value.replace(/\D/g, ''))}
+                                                    onKeyDown={(e) => e.key === 'Enter' && handleDefinirSenha()}
+                                                    placeholder="••••"
+                                                    className="w-full text-center text-3xl font-black p-4 border-2 border-slate-300 rounded-xl focus:border-blue-500 outline-none tracking-widest"
+                                                />
+                                            </div>
+
+                                            {erro && (
+                                                <div className="bg-red-50 border-2 border-red-200 text-red-700 p-3 rounded-lg text-center font-bold">
+                                                    {erro}
+                                                </div>
+                                            )}
+
+                                            <button 
+                                                onClick={handleDefinirSenha}
+                                                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-black py-4 rounded-xl text-lg shadow-lg transition-all"
+                                            >
+                                                DEFINIR SENHA
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-2xl font-black text-slate-800 mb-6 text-center">Digite sua senha</h2>
+                                        
+                                        <div className="space-y-4">
+                                            <div>
+                                                <input 
+                                                    ref={senhaInputRef}
+                                                    type="password"
+                                                    maxLength="4"
+                                                    value={senha}
+                                                    onChange={(e) => setSenha(e.target.value.replace(/\D/g, ''))}
+                                                    onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                                                    placeholder="••••"
+                                                    className="w-full text-center text-4xl font-black p-6 border-2 border-slate-300 rounded-xl focus:border-blue-500 outline-none tracking-widest"
+                                                />
+                                            </div>
+
+                                            {erro && (
+                                                <div className="bg-red-50 border-2 border-red-200 text-red-700 p-3 rounded-lg text-center font-bold animate-pulse">
+                                                    {erro}
+                                                </div>
+                                            )}
+
+                                            <button 
+                                                onClick={handleLogin}
+                                                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-black py-4 rounded-xl text-lg shadow-lg transition-all"
+                                            >
+                                                ENTRAR
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
             if (loading) return <div className="h-screen flex items-center justify-center font-bold">Sincronizando...</div>;
 
             const resumo = calcularTotais();
@@ -238,7 +412,6 @@
                 <div className="h-screen bg-slate-50 p-3 font-sans text-slate-800 flex flex-col overflow-hidden">
                     <div className="max-w-[1800px] mx-auto w-full flex flex-col h-full">
                         
-                        {/* HEADER COMPACTO */}
                         <div className="bg-white rounded-xl shadow-lg border-b-4 border-blue-600 mb-3 flex-shrink-0">
                             <div className="bg-blue-600 px-4 py-2 text-white flex items-center justify-between">
                                 <h1 className="text-xl font-black tracking-tight">CONTROLE - JOGO DO BICHO</h1>
@@ -250,7 +423,6 @@
                             </div>
                             
                             <div className="p-3 grid grid-cols-12 gap-3 items-center">
-                                {/* Lançamento */}
                                 <div className="col-span-5 flex gap-2 items-end bg-slate-50 p-2 rounded-lg">
                                     <div className="flex-1">
                                         <label className="text-[9px] font-bold text-slate-400 uppercase mb-0.5 block">Valor (máx: 100.000)</label>
@@ -290,7 +462,6 @@
                                     </button>
                                 </div>
 
-                                {/* Totalizadores */}
                                 <div className="col-span-7 grid grid-cols-3 gap-2">
                                     <div className="bg-blue-50 p-2 rounded-lg border border-blue-200 text-center">
                                         <p className="text-[9px] font-bold text-blue-500 uppercase">Investido</p>
@@ -308,7 +479,6 @@
                             </div>
                         </div>
 
-                        {/* GRID DE DIAS */}
                         <div className="bg-white rounded-xl shadow-lg overflow-hidden flex-1 flex flex-col min-h-0">
                             <div className="overflow-auto flex-1 p-2">
                                 <div className="grid grid-cols-7 gap-1.5">
@@ -339,23 +509,25 @@
                                                                 <div className="grid grid-cols-2 gap-0.5 text-[10px]">
                                                                     <input 
                                                                         type="text"
+                                                                        key={`${dia}-${hora}-I-${d.I}`}
                                                                         defaultValue={d.I === 0 ? '' : d.I.toFixed(2)}
-                                                                        onBlur={(e) => handleUpdateTabela(dia, 'I', e.target.value)}
+                                                                        onBlur={(e) => handleUpdateTabela(dia, hora, 'I', e.target.value)}
                                                                         onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
                                                                         placeholder="I"
                                                                         className="w-full text-center font-semibold bg-blue-50 border border-blue-200 rounded p-0.5 focus:ring-1 focus:ring-blue-500 outline-none"
                                                                     />
                                                                     <input 
                                                                         type="text"
+                                                                        key={`${dia}-${hora}-G-${d.G}`}
                                                                         defaultValue={d.G === 0 ? '' : d.G.toFixed(2)}
-                                                                        onBlur={(e) => handleUpdateTabela(dia, 'G', e.target.value)}
+                                                                        onBlur={(e) => handleUpdateTabela(dia, hora, 'G', e.target.value)}
                                                                         onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
                                                                         placeholder="G"
                                                                         className="w-full text-center font-semibold bg-green-50 border border-green-200 rounded p-0.5 focus:ring-1 focus:ring-green-500 outline-none"
                                                                     />
                                                                 </div>
                                                                 <div className={`text-[9px] font-black text-center mt-0.5 ${d.S < 0 ? 'text-red-600' : d.S > 0 ? 'text-emerald-600' : 'text-slate-300'}`}>
-                                                                    {d.S !== 0 ? d.S.toFixed(2) : '—'}
+                                                                    {d.I === 0 && d.G === 0 ? '—' : (d.S === 0 ? '0,00' : d.S.toFixed(2))}
                                                                 </div>
                                                             </div>
                                                         );
@@ -365,7 +537,7 @@
                                                 <div className={`border-t-2 p-1 text-center ${totalDiaS < 0 ? 'bg-red-50 border-red-200' : totalDiaS > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
                                                     <div className="text-[8px] font-bold text-slate-400 uppercase">Total</div>
                                                     <div className={`text-[11px] font-black ${totalDiaS < 0 ? 'text-red-700' : totalDiaS > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>
-                                                        {totalDiaS !== 0 ? `R$ ${totalDiaS.toFixed(2)}` : '—'}
+                                                        {totalDiaI === 0 && totalDiaG === 0 ? '—' : (totalDiaS === 0 ? 'R$ 0,00' : `R$ ${totalDiaS.toFixed(2)}`)}
                                                     </div>
                                                 </div>
                                             </div>
@@ -376,7 +548,6 @@
                         </div>
                     </div>
 
-                    {/* MODAL TABELA DE BICHOS */}
                     {mostrarTabela && (
                         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                             <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full overflow-hidden max-h-[90vh] flex flex-col">
@@ -414,7 +585,6 @@
                         </div>
                     )}
 
-                    {/* MODAL RELATÓRIO */}
                     {mostrarRelatorio && (
                         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
@@ -494,5 +664,4 @@
         ReactDOM.render(<JogoBichoTracker />, document.getElementById('root'));
     </script>
 </body>
-
 </html>
